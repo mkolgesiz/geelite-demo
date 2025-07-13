@@ -1,0 +1,328 @@
+---
+title: "Geelite Data Visualization"
+author: "M. Melik Kolgesiz"
+output: html
+code-tools: true
+code-fold: true
+embed-resources: true
+toc: true
+toc-title: "Table of contents"
+toc-location: right
+editor: visual
+theme: flatly
+---
+
+# Preface
+
+This document presents a comprehensive analysis of vegetation dynamics across Turkey using MODIS NDVI (Normalized Difference Vegetation Index) data accessed through the geeLite R package. The analysis covers the period from 2020 to 2025, providing insights into spatial and temporal patterns of vegetation health and change.
+
+## Load the necessary libraries
+
+We begin by loading the essential R packages required for this analysis. These libraries provide functionality for data manipulation, spatial analysis, interactive mapping, and statistical visualization.
+
+```{r}
+#| label: Libraries
+#| echo: true
+#| message: false
+#| warning: false
+library(ggplot2)
+library(dplyr)
+library(sf)
+library(leaflet)
+library(geeLite)
+library(DT)
+library(tidyr)
+library(htmlwidgets)
+```
+
+## Load the geeLite database and spatial dataframe
+
+We load the pre-processed geeLite database containing MODIS NDVI data for Turkey. The database must be ready for analysis, having been created through the geeLite workflow which downloads and processes Earth Engine data into a local SQLite database. The spatial data is merged with the hexagonal grid system for geographic visualization.
+
+```{r}
+#| label: Load df
+#| echo: true
+#| message: false
+#| warning: false
+
+# Load geeLite database with proper path
+db <- read_db(path = "../data/tr-geelite", freq = "month")
+
+# Load spatial data directly from geeLite database
+sf_data <- merge(db$grid, db$`MODIS/061/MOD13A2/NDVI/mean`, by = "id")
+```
+
+## Process data frame for visualization
+
+This section transforms the spatial data into formats suitable for time series analysis and visualization. We extract date columns, reshape the data from wide to long format, and calculate summary statistics for each time period including mean, median, and variability measures across all hexagonal grid cells.
+
+```{r}
+#| warning: false
+
+# Get date columns for NDVI data (exclude metadata columns)
+date_cols <- colnames(sf_data)[!colnames(sf_data) %in% c("id", "iso", "aggregation", "postprocess", "geometry")]
+
+# Prepare data for time slicing
+sf_long <- sf_data %>%
+  st_drop_geometry() %>%
+  select(id, all_of(date_cols)) %>%
+  tidyr::pivot_longer(cols = all_of(date_cols), names_to = "date", values_to = "ndvi") %>%
+  mutate(date = as.Date(date))
+
+# Calculate summary statistics by time period
+ndvi_summary <- sf_long %>%
+  group_by(date) %>%
+  summarise(
+    mean_ndvi = mean(ndvi, na.rm = TRUE),
+    median_ndvi = median(ndvi, na.rm = TRUE),
+    min_ndvi = min(ndvi, na.rm = TRUE),
+    max_ndvi = max(ndvi, na.rm = TRUE),
+    std_ndvi = sd(ndvi, na.rm = TRUE),
+    valid_cells = sum(!is.na(ndvi)),
+    .groups = "drop"
+  )
+
+```
+
+## Interactive Leaflet Map with time slice
+
+Following the World Bank blog approach, we created an interactive map that visualizes NDVI values across Turkey. Different time periods can be seen how vegetation patterns change over time.
+
+```{r}
+#| warning: false
+
+# Create a function to generate maps for different time periods
+create_ndvi_map <- function(selected_date, data = sf_data, cols = date_cols) {
+  ndvi_values <- data[[selected_date]]
+  valid_ndvi <- ndvi_values[!is.na(ndvi_values)]
+  
+  # Create color palette with explicit domain range
+  pal <- colorNumeric("viridis", domain = range(valid_ndvi, na.rm = TRUE))
+  
+  # Create leaflet map following blog example
+  leaflet(data) %>%
+    addTiles() %>%
+    addPolygons(
+      fillColor = ~pal(ndvi_values),
+      weight = 1,
+      color = "#333333",
+      fillOpacity = 0.9,
+      popup = ~paste("NDVI:", round(ndvi_values, 1), 
+                    "<br>Date:", selected_date,
+                    "<br>Hex ID:", id)
+    ) %>%
+    addScaleBar() %>%
+    addLegend(
+      pal = pal, 
+      values = ~ndvi_values, 
+      title = paste("NDVI", selected_date),
+      na.label = "No data",
+      position = "bottomright"
+    )
+}
+
+# Create maps for several key time periods
+sample_dates <- c("2020-01-01", "2021-07-01", "2023-01-01", "2024-07-01", "2025-06-01")
+available_dates <- intersect(sample_dates, date_cols)
+
+```
+
+### Interactive Maps by Time Period
+
+The following tabbed interface displays interactive maps for five key time periods, allowing comparison of vegetation patterns across different seasons and years. Each map uses a viridis color scheme where darker colors indicate lower NDVI values (less vegetation) and brighter colors indicate higher NDVI values (more vegetation).
+
+::: panel-tabset
+#### 2020-01-01
+
+```{r}
+create_ndvi_map("2020-01-01")
+```
+
+#### 2021-07-01
+
+```{r}
+create_ndvi_map("2021-07-01")
+```
+
+#### 2023-01-01
+
+```{r}
+create_ndvi_map("2023-01-01")
+```
+
+#### 2024-07-01
+
+```{r}
+create_ndvi_map("2024-07-01")
+```
+
+#### 2025-06-01
+
+```{r}
+create_ndvi_map("2025-06-01")
+```
+:::
+
+## Time Series Analysis
+
+This section presents temporal trends in vegetation health across Turkey through two complementary visualizations. The first plot shows the overall trajectory of mean NDVI values, while the second plot illustrates variability and uncertainty by displaying confidence bands around the mean trend along with median values for comparison.
+
+```{r}
+# Create time series plot of mean NDVI values
+p1 <- ggplot(ndvi_summary, aes(x = date, y = mean_ndvi)) +
+  geom_line(color = "darkgreen", linewidth = 1.2) +
+  geom_point(color = "darkgreen", size = 2) +
+  labs(
+    title = "Turkey NDVI Time Series Analysis (2020-2025)",
+    subtitle = "Based on MODIS NDVI Data via geeLite",
+    x = "Date",
+    y = "Mean NDVI",
+    caption = "Data source: Google Earth Engine via geeLite"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    plot.subtitle = element_text(size = 12),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+print(p1)
+```
+
+```{r}
+# Create plot showing NDVI variability over time
+p2 <- ggplot(ndvi_summary, aes(x = date)) +
+  geom_ribbon(aes(ymin = mean_ndvi - std_ndvi, ymax = mean_ndvi + std_ndvi), 
+              alpha = 0.3, fill = "green") +
+  geom_line(aes(y = mean_ndvi), color = "darkgreen", linewidth = 1.2) +
+  geom_line(aes(y = median_ndvi), color = "blue", linewidth = 1, linetype = "dashed") +
+  labs(
+    title = "NDVI Variability Across Turkey",
+    subtitle = "Mean ± Standard Deviation (green band) and Median (blue dashed)",
+    x = "Date",
+    y = "NDVI",
+    caption = "Data source: Google Earth Engine via geeLite"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    plot.subtitle = element_text(size = 12),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+print(p2)
+```
+
+## Summary Statistics
+
+This section provides comprehensive statistical summaries of the NDVI analysis, including key metrics about data coverage, temporal scope, and overall vegetation trends. The summary table presents essential findings in a structured format for easy interpretation.
+
+```{r}
+# Calculate overall statistics
+baseline_ndvi <- ndvi_summary$mean_ndvi[1]
+latest_ndvi <- tail(ndvi_summary$mean_ndvi, 1)
+total_change <- latest_ndvi - baseline_ndvi
+mean_change_per_period <- mean(diff(ndvi_summary$mean_ndvi), na.rm = TRUE)
+
+# Create summary table
+summary_stats <- data.frame(
+  Metric = c("Analysis Period", "Total Observations", "Hexagonal Cells", 
+             "Baseline NDVI", "Latest NDVI", "Total Change", 
+             "Average Change per Period", "Overall Trend"),
+  Value = c(
+    paste(min(ndvi_summary$date), "to", max(ndvi_summary$date)),
+    format(nrow(sf_long), big.mark = ","),
+    nrow(sf_data),
+    round(baseline_ndvi, 1),
+    round(latest_ndvi, 1),
+    round(total_change, 1),
+    round(mean_change_per_period, 2),
+    ifelse(total_change > 50, "Vegetation Improvement", 
+           ifelse(total_change < -50, "Vegetation Decline", "Stable"))
+  )
+)
+
+# Display summary table
+knitr::kable(summary_stats, 
+             caption = "Turkey NDVI Analysis Summary",
+             col.names = c("Metric", "Value"))
+```
+
+### Interactive Data Explorer
+
+The interactive table below allows detailed exploration of the time series data. Users can search, sort, and filter the monthly NDVI statistics to identify specific patterns or periods of interest. The table includes statistical measures for each time period across all hexagonal grid cells.
+
+```{r}
+# Create interactive data table
+DT::datatable(
+  ndvi_summary %>%
+    mutate(
+      Date = format(date, "%Y-%m-%d"),
+      `Mean NDVI` = round(mean_ndvi, 1),
+      `Median NDVI` = round(median_ndvi, 1),
+      `Min NDVI` = round(min_ndvi, 1),
+      `Max NDVI` = round(max_ndvi, 1),
+      `Std Dev` = round(std_ndvi, 1),
+      `Valid Cells` = valid_cells
+    ) %>%
+    select(-date, -mean_ndvi, -median_ndvi, -min_ndvi, -max_ndvi, -std_ndvi, -valid_cells),
+  caption = "Turkey NDVI Time Series Data",
+  options = list(
+    pageLength = 15,
+    scrollX = TRUE,
+    dom = 'Bfrtip'
+  ),
+  rownames = FALSE
+)
+```
+
+## Key Findings
+
+This section synthesizes the main results from our vegetation analysis, highlighting significant trends and patterns observed in Turkey's NDVI data over the 2020-2025 period.
+
+### Analysis Results
+
+The following table summarizes the key quantitative findings from our analysis, including data coverage metrics, temporal scope, NDVI value ranges, and overall vegetation change assessment based on the comparison between baseline and latest observations.
+
+```{r}
+# Create results summary data frame
+baseline_ndvi <- ndvi_summary$mean_ndvi[1]
+latest_ndvi <- tail(ndvi_summary$mean_ndvi, 1)
+total_change <- latest_ndvi - baseline_ndvi
+
+results_summary <- data.frame(
+  Metric = c("Data Coverage", "Time Period", "NDVI Range", "Baseline NDVI", 
+             "Latest NDVI", "Total Change", "Assessment"),
+  Value = c(
+    paste(nrow(sf_data), "hexagonal cells across Turkey"),
+    paste(length(date_cols), "monthly observations from", min(date_cols), "to", max(date_cols)),
+    paste(round(min(sf_long$ndvi, na.rm = TRUE)), "to", round(max(sf_long$ndvi, na.rm = TRUE))),
+    paste(round(baseline_ndvi, 1), "(", min(date_cols), ")"),
+    paste(round(latest_ndvi, 1), "(", max(date_cols), ")"),
+    paste(round(total_change, 1), "NDVI units"),
+    case_when(
+      total_change > 50 ~ "VEGETATION IMPROVEMENT DETECTED 🌱",
+      total_change < -50 ~ "VEGETATION DECLINE DETECTED ⚠️",
+      TRUE ~ "Vegetation levels appear stable"
+    )
+  )
+)
+
+knitr::kable(results_summary, col.names = c("**Metric**", "**Value**"))
+```
+
+### Methodology
+
+This analysis uses the geeLite R package to analyze MODIS NDVI data from Google Earth Engine. The data is aggregated into hexagonal grid cells covering Turkey, with monthly time series from 2020 to 2025. Interactive maps allow exploration of spatial and temporal patterns in vegetation health across the country.
+
+## References
+
+1.  **World Bank Data Team.** (2024). *geeLite – an R package for tracking remote sensing data locally*. World Bank Blogs - Open Data. Available at: https://blogs.worldbank.org/en/opendata/geelite--an-r-package-for-tracking-remote-sensing-datalocally-
+
+2.  **Braaten, J., Bullock, E., & Gorelick, N.** (2024). *geeLite: Client for Accessing and Processing Google Earth Engine Data*. GitHub Repository. Available at: https://github.com/gee-community/geeLite
+
+3.  **Google Earth Engine Team.** (2024). *MODIS/061/MOD13A2: MODIS Terra Vegetation Indices 16-Day Global 1km*. Google Earth Engine Data Catalog. Available at: https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MOD13A2

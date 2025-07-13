@@ -47,3 +47,31 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# Environment variables (contains sensitive information)
+.env
+
+# Google Earth Engine credentials
+*.json
+*.pem
+service-account-*.json
+gee-credentials/
+
+# renv
+renv/library/
+renv/staging/
+renv/local/
+renv/cellar/
+renv/lock.json
+
+# Analysis outputs
+data/*.db
+data/*.sqlite
+data/*.csv
+data/*.png
+data/*.html
+log/*.log
+
+# Temporary files
+*.tmp
+*.temp
